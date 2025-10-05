@@ -1,71 +1,174 @@
-# Getting Started with Create React App
+# 🐳 Taller Docker Test - Rick & Morty App
+Autor: alejoamu
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
-hi
+## 📋 Descripción del Proyecto
+Aplicación web desarrollada con Create React App que muestra personajes de Rick & Morty. En este repositorio se añadió:
 
-## Available Scripts
+- Un `Dockerfile` multi-stage para construir la app y servirla con `nginx` en producción.
+- Un workflow de GitHub Actions para construir y publicar la imagen Docker en Docker Hub: `.github/workflows/docker-publish.yml`.
+- Un `.dockerignore` para excluir archivos que no deben incluirse en la imagen.
 
-In the project directory, you can run:
+El objetivo es demostrar contenedorización y CI/CD automático usando GitHub Actions y Docker Hub.
 
-### `npm start`
+## 🚀 Guía de Ejecución Paso a Paso
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### Prerrequisitos
+- Docker instalado
+- Node.js 18+ (solo para desarrollo local)
+- Cuenta en Docker Hub
+- Repositorio en GitHub con los secrets configurados
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+### 📝 Paso 1: Dockerfile (qué hace)
+El `Dockerfile` usado en este proyecto es multi-stage:
 
-### `npm test`
+- Etapa `build` (base: `node:18-alpine`): instala dependencias y ejecuta `npm run build`.
+- Etapa `production` (base: `nginx:stable-alpine`): copia la carpeta `build` a `/usr/share/nginx/html` y sirve la app en el puerto 80.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+Esto produce una imagen optimizada para producción que solo contiene los artefactos estáticos y `nginx`.
 
-### `npm run build`
+#### Configuración del `Dockerfile`
+Aquí tienes el `Dockerfile` utilizado en este repositorio (multi-stage) — puedes copiarlo a la raíz como `Dockerfile`:
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```dockerfile
+# Multi-stage Dockerfile for Create React App
+FROM node:18-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --silent
+COPY . .
+RUN npm run build
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+FROM nginx:stable-alpine AS production
+RUN rm -rf /usr/share/nginx/html/*
+COPY --from=build /app/build /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Explicación rápida de cada línea relevante:
+- `node:18-alpine`: pequeña imagen para compilar la app.
+- `npm ci --silent`: instala dependencias reproducibles en CI.
+- `npm run build`: genera los archivos estáticos en `build/`.
+- `nginx:stable-alpine`: imagen ligera para servir contenido estático.
+- `COPY --from=build /app/build /usr/share/nginx/html`: copia artefactos al servidor web.
 
-### `npm run eject`
+### ⚙️ Paso 2: GitHub Actions (CI/CD)
+Archivo: `.github/workflows/docker-publish.yml`
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+Resumen del workflow:
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+- Checkout del repositorio
+- Setup QEMU y Docker Buildx (para build multi-arch)
+- Login a Docker Hub usando secrets
+- Build y push de la imagen (tags: `latest` y `sha`)
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+Tags que se generan:
+- `${{ secrets.DOCKERHUB_USERNAME }}/docker-test:latest`
+- `${{ secrets.DOCKERHUB_USERNAME }}/docker-test:${{ github.sha }}`
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### 🔑 Paso 3: Configurar secretos en GitHub
+Ve a: Repository → Settings → Secrets and variables → Actions → New repository secret
 
-## Learn More
+Agrega estos secrets:
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+- `DOCKERHUB_USERNAME` — tu usuario de Docker Hub (ej. `alejoamu`)
+- `DOCKERHUB_TOKEN` — Personal Access Token generado en Docker Hub (Account → Personal Access Tokens → Create)
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+![alt text](image-1.png)
 
-### Code Splitting
+El workflow comprueba que ambos secretos existan antes de intentar el login.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
 
-### Analyzing the Bundle Size
+#### Configuración del workflow (ejemplo)
+Este es el contenido principal del workflow que se agregó al repo — puedes revisarlo en `.github/workflows/docker-publish.yml`:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+```yaml
+name: Build and publish Docker image
 
-### Making a Progressive Web App
+on:
+	push:
+		branches: [ main ]
+	workflow_dispatch:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+jobs:
+	build-and-push:
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- uses: docker/setup-qemu-action@v2
+			- uses: docker/setup-buildx-action@v2
+			- name: Check Docker secrets
+				run: |
+					if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+						echo "::error::DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is not set"; exit 1
+					fi
+			- uses: docker/login-action@v2
+				with:
+					registry: docker.io
+					username: ${{ secrets.DOCKERHUB_USERNAME }}
+					password: ${{ secrets.DOCKERHUB_TOKEN }}
+			- uses: docker/build-push-action@v5
+				with:
+					context: .
+					file: ./Dockerfile
+					push: true
+					tags: |
+						${{ secrets.DOCKERHUB_USERNAME }}/docker-test:latest
+						${{ secrets.DOCKERHUB_USERNAME }}/docker-test:${{ github.sha }}
+```
 
-### Advanced Configuration
+### ✅ Paso 4: Ejecutar el pipeline (trigger)
+El workflow se ejecuta automáticamente al hacer `push` en `main`. También puedes ejecutarlo manualmente desde la interfaz de Actions (`Run workflow`) o lanzar un commit vacío:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+```powershell
+cd D:\docker-test
+git commit --allow-empty -m "Trigger CI: build and push image"
+git push origin main
+```
+![alt text](image-2.png)
 
-### Deployment
+## 📦 Verificar la imagen en Docker Hub
+Después de un push exitoso, la imagen debe aparecer en Docker Hub bajo tu cuenta, repo `docker-test`.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+![alt text](image-3.png)
 
-### `npm run build` fails to minify
+Puedes verificar tirando la imagen desde cualquier máquina:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+```powershell
+# Reemplaza <TU_USUARIO> por tu usuario en Docker Hub
+docker pull <TU_USUARIO>/docker-test:latest
+docker run --rm -p 8080:80 <TU_USUARIO>/docker-test:latest
+# Abrir http://localhost:8080
+```
+
+Nota: la imagen sirve la app en el puerto 80 dentro del contenedor; localmente mapeamos a `8080` para evitar conflictos.
+
+Una vez ejecutado el contenedor, la aplicación estará disponible en:
+
+URL: http://localhost:8080
+
+![alt text](image-4.png)
+
+## 🖥️ Ejecutar localmente (sin Docker Hub)
+Puedes construir y correr la imagen localmente para probar:
+
+```powershell
+cd D:\docker-test
+docker build -t docker-test:local .
+docker run --rm -p 8080:80 docker-test:local
+# Abrir http://localhost:8080
+```
+
+Si prefieres ejecutar la app en modo desarrollo con Node:
+
+```powershell
+npm install
+npm run dev
+# o npm start según tu package.json
+```
+
+## 🔍 Logs y debugging
+- Si el workflow falla en el paso de login, verifica los secrets (`DOCKERHUB_USERNAME` y `DOCKERHUB_TOKEN`).
+- Si falla `npm run build` en el runner, revisa los logs del step `Build and push` para detalles de compilación.
+- Para problemas con `docker buildx` o QEMU, revisa los pasos `Set up QEMU` y `Set up Docker Buildx` en los logs.
+
